@@ -1,4 +1,4 @@
-function mpm_Ncontrasts(contrasts, b1map, outdir, threshold)
+function mpm_Ncontrasts(contrasts, b1map, outdir, threshold, r2sfamethod)
 % Compute T1, PD and R2* from any number of flip angle acquisitions
 %
 % Reads metadata from sidecar json files
@@ -7,13 +7,16 @@ function mpm_Ncontrasts(contrasts, b1map, outdir, threshold)
 %
 % Data must have been registered and resliced to the same space outside this script!
 %
-% contrasts: a cell array of string arrays giving paths to data, e.g.
+% contrasts:   a cell array of string arrays giving paths to data, e.g.
 %     contrasts = {["PDw_e1.nii", "PDw_e2.nii", "PDw_e3.nii"], 
 %                  ["T1w_e1.nii", "T1w_e2.nii", "T1w_e3.nii"],
 %                  ["ern_e1.nii", "ern_e2.nii", "ern_e3.nii"]};
-% outdir:    output directory
-% b1map:     path of B1map resliced to MPM space
-% threshold: threshold to mask low intensity data for T1 map calculation
+% outdir:      output directory
+% b1map:       path of B1map resliced to MPM space
+% threshold:   threshold to mask low intensity data for T1 map calculation
+% r2sfamethod: method to account for flip-angle dependence of R2* estimation
+%              ('none' or 'linear'). Requires hmri_calc_R2s.m from the
+%              add_r2s-fa-dep branch of the hMRI toolbox
 
 Vref = spm_vol(char(contrasts{1}(1)));
 
@@ -49,7 +52,7 @@ end
 
 %% Fit R2*
 R2star = nan(Vref.dim);
-%DeltaR2star = nan(Vref.dim);
+DeltaR2star = nan(Vref.dim);
 extrapolated = cell(length(contrasts),1);
 for c = 1:length(contrasts)
     extrapolated{c} = nan(Vref.dim);
@@ -67,8 +70,13 @@ for z=1:Vref.dim(3) % process data by slice
         end
         weightedData(c).data(weightedData(c).data<eps) = eps;
     end
-    [R2star(:,:,z),extrapolatedz] = hmri_calc_R2s(weightedData,"WLS1");
-    %[R2star(:,:,z),extrapolatedz,DeltaR2star(:,:,z)] = hmri_calc_R2s(weightedData,"WLS1","linear");
+
+    if strcmp(r2sfamethod,"linear")
+        [R2star(:,:,z),extrapolatedz,DeltaR2star(:,:,z)] = hmri_calc_R2s(weightedData,"WLS1","linear");
+    else
+        [R2star(:,:,z),extrapolatedz] = hmri_calc_R2s(weightedData,"WLS1");
+    end
+
     for c = 1:length(contrasts)
         extrapolated{c}(:,:,z) = extrapolatedz{c};
     end
@@ -78,11 +86,12 @@ spm_progress_bar('Clear');
 
 Vout = Vref;
 Vout.dt(1) = spm_type('float32');
-Vout.fname = char(fullfile(outdir,"R2star.nii"));
+Vout.fname = char(fullfile(outdir,"R2starMap.nii"));
 spm_write_vol(Vout,R2star);
 
-%Vout.fname = char(fullfile(outdir,"DeltaR2star.nii"));
-%spm_write_vol(Vout,DeltaR2star);
+% This DeltaR2s still has B1 bias in it
+Vout.fname = char(fullfile(outdir,"B1DeltaR2starMap.nii"));
+spm_write_vol(Vout,DeltaR2star);
 
 TEzerofile = cell(length(contrasts),1);
 for c = 1:length(contrasts)
@@ -104,6 +113,7 @@ clear weightedData
 %%
 T1 = nan(Vref.dim);
 A  = nan(Vref.dim);
+unscaledDeltaR2s  = nan(Vref.dim);
 spm_progress_bar('Init',Vref.dim(3),'T1 fit');
 for z = 1:Vref.dim(3) % process data by slice
     B1 = hmri_read_vols(spm_vol(char(b1map)),Vref,z,3)*0.01;
@@ -114,6 +124,9 @@ for z = 1:Vref.dim(3) % process data by slice
     mask = dat0(1).data>threshold;
 
     [A(:,:,z),T1(:,:,z)]=weighted2AT1(dat0,B1,mask);
+
+    % remove B1 scaling of DeltaR2s while we have the B1 map loaded
+    unscaledDeltaR2s(:,:,z) = DeltaR2star(:,:,z)./B1;
 
     spm_progress_bar('Set',z);
 end
@@ -130,5 +143,9 @@ spm_write_vol(VR1,1./T1);
 VA = Vout;
 VA.fname = char(fullfile(outdir,"Amap.nii"));
 spm_write_vol(VA,A);
+
+VDelta = Vout;
+VDelta.fname = char(fullfile(outdir,"DeltaR2starMap.nii"));
+spm_write_vol(VDelta,unscaledDeltaR2s);
 
 end
