@@ -12,7 +12,7 @@ function mpm_Ncontrasts(contrasts, b1map, outdir, threshold)
 %                  ["T1w_e1.nii", "T1w_e2.nii", "T1w_e3.nii"],
 %                  ["ern_e1.nii", "ern_e2.nii", "ern_e3.nii"]};
 % outdir:    output directory
-% b1map:     B1map resliced to MPM space
+% b1map:     path of B1map resliced to MPM space
 % threshold: threshold to mask low intensity data for T1 map calculation
 
 Vref = spm_vol(char(contrasts{1}(1)));
@@ -89,7 +89,7 @@ clear weightedData
 T1 = nan(Vref.dim);
 A  = nan(Vref.dim);
 for z = 1:Vref.dim(3) % process data by slice
-    B1 = hmri_read_vols(spm_vol(char(fullfile(b1map.folder,b1map.name))),Vref,z,3)*0.01;
+    B1 = hmri_read_vols(spm_vol(char(b1map)),Vref,z,3)*0.01;
     for c = 1:length(contrasts)
         dat0(c).data = hmri_read_vols(spm_vol(TEzerofile{c}),Vref,z,3);
     end
