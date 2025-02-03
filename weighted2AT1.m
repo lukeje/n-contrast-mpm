@@ -11,13 +11,13 @@
 
 function [A,T1]=weighted2AT1(weightedStructs,relativeB1,mask)
 
-if ~exist('relativeB1','var')
+if ~exist('relativeB1','var') || isempty(relativeB1)
     relativeB1=1;
 end
 
 dim = size(weightedStructs(1).data);
 
-if ~exist('mask','var')
+if ~exist('mask','var') || isempty(mask)
     mask = true(dim);
 end
 

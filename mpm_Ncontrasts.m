@@ -12,13 +12,17 @@ function mpm_Ncontrasts(contrasts, b1map, outdir, threshold, r2sfamethod)
 %                  ["T1w_e1.nii", "T1w_e2.nii", "T1w_e3.nii"],
 %                  ["ern_e1.nii", "ern_e2.nii", "ern_e3.nii"]};
 % outdir:      output directory
-% b1map:       path of B1map resliced to MPM space
+% b1map:       path(s) of B1map resliced to MPM space; can be one per contrast or just one
 % threshold:   threshold to mask low intensity data for T1 map calculation
 % r2sfamethod: method to account for flip-angle dependence of R2* estimation
-%              ('none' or 'linear'). Requires hmri_calc_R2s.m from the
-%              add_r2s-fa-dep branch of the hMRI toolbox
+%              ('none' or 'linear').
 
 Vref = spm_vol(char(contrasts{1}(1)));
+
+% ensure there is a B1 map for each contrast
+if (ischar(b1map) && size(b1map,1)==1) || isscalar(b1map)
+    b1map = repmat(b1map,length(contrasts),1);
+end
 
 %% Get files
 % Extract metadata
@@ -40,14 +44,14 @@ for c = length(contrasts):-1:1 % allocate backwards to get rid of matlab warning
             weightedData(c).TE(echo) = bidsJson.EchoTime;
             weightedData(c).TR(echo) = bidsJson.RepetitionTimeExcitation;
         end
-        weightedData(c).fa(echo) = deg2rad(bidsJson.FlipAngle);
+        fa(echo) = deg2rad(bidsJson.FlipAngle);
         fclose(fid);
         
         assert(weightedData(c).TR(echo)==weightedData(c).TR(1), "TR must match within a contrast!")
         assert(weightedData(c).fa(echo)==weightedData(c).fa(1), "Flip angle must match within a contrast!")
     end
     weightedData(c).TR = weightedData(c).TR(1);
-    weightedData(c).fa = weightedData(c).fa(1);
+    weightedData(c).fanom = fa(1);
 end
 
 %% Fit R2*
@@ -69,13 +73,12 @@ for z=1:Vref.dim(3) % process data by slice
             weightedData(c).data(:,:,echo) = spm_slice_vol(V,spm_matrix([0 0 z]),Vref.dim(1:2),0);
         end
         weightedData(c).data(weightedData(c).data<eps) = eps;
+
+        B1 = hmri_read_vols(spm_vol(char(b1map(c,:))),Vref,z,3)*0.01;
+        weightedData(c).fa = weightedData(c).fanom*B1;
     end
 
-    if strcmp(r2sfamethod,"linear")
-        [R2star(:,:,z),extrapolatedz,DeltaR2star(:,:,z)] = hmri_calc_R2s(weightedData,"WLS1","linear");
-    else
-        [R2star(:,:,z),extrapolatedz] = hmri_calc_R2s(weightedData,"WLS1");
-    end
+    [R2star(:,:,z),extrapolatedz,DeltaR2star(:,:,z)] = weighted2R2s(weightedData,"WLS1",r2sfamethod);
 
     for c = 1:length(contrasts)
         extrapolated{c}(:,:,z) = extrapolatedz{c};
@@ -89,8 +92,7 @@ Vout.dt(1) = spm_type('float32');
 Vout.fname = char(fullfile(outdir,"R2starMap.nii"));
 spm_write_vol(Vout,R2star);
 
-% This DeltaR2s still has B1 bias in it
-Vout.fname = char(fullfile(outdir,"B1DeltaR2starMap.nii"));
+Vout.fname = char(fullfile(outdir,"DeltaR2starMap.nii"));
 spm_write_vol(Vout,DeltaR2star);
 
 TEzerofile = cell(length(contrasts),1);
@@ -103,30 +105,26 @@ end
 clear R2star extrapolated
 
 %%
-for c = 1:length(contrasts)
-    dat0(c).TR = weightedData(c).TR(1); %#ok<AGROW>
-    dat0(c).fa = weightedData(c).fa(1); %#ok<AGROW>
+for c = length(contrasts):-1:1
+    dat0(c).TR    = weightedData(c).TR;
+    dat0(c).fanom = weightedData(c).fanom;
 end
-
-clear weightedData
 
 %%
 T1 = nan(Vref.dim);
 A  = nan(Vref.dim);
-unscaledDeltaR2s  = nan(Vref.dim);
 spm_progress_bar('Init',Vref.dim(3),'T1 fit');
 for z = 1:Vref.dim(3) % process data by slice
-    B1 = hmri_read_vols(spm_vol(char(b1map)),Vref,z,3)*0.01;
     for c = 1:length(contrasts)
         dat0(c).data = hmri_read_vols(spm_vol(TEzerofile{c}),Vref,z,3);
+
+        B1 = hmri_read_vols(spm_vol(char(b1map(c,:))),Vref,z,3)*0.01;
+        dat0(c).fa = B1*dat0(c).fanom;
     end
 
     mask = dat0(1).data>threshold;
 
-    [A(:,:,z),T1(:,:,z)]=weighted2AT1(dat0,B1,mask);
-
-    % remove B1 scaling of DeltaR2s while we have the B1 map loaded
-    unscaledDeltaR2s(:,:,z) = DeltaR2star(:,:,z)./B1;
+    [A(:,:,z),T1(:,:,z)]=weighted2AT1(dat0,1,mask);
 
     spm_progress_bar('Set',z);
 end
@@ -143,9 +141,5 @@ spm_write_vol(VR1,1./T1);
 VA = Vout;
 VA.fname = char(fullfile(outdir,"Amap.nii"));
 spm_write_vol(VA,A);
-
-VDelta = Vout;
-VDelta.fname = char(fullfile(outdir,"DeltaR2starMap.nii"));
-spm_write_vol(VDelta,unscaledDeltaR2s);
 
 end
