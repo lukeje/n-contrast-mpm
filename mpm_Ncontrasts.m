@@ -42,7 +42,11 @@ for c = length(contrasts):-1:1 % allocate backwards to get rid of matlab warning
             weightedData(c).TR(echo) = bidsJson.RepetitionTime*1e-3;
         else
             weightedData(c).TE(echo) = bidsJson.EchoTime;
-            weightedData(c).TR(echo) = bidsJson.RepetitionTimeExcitation;
+            if isfield(bidsJson,'RepetitionTimeExcitation')
+                weightedData(c).TR(echo) = bidsJson.RepetitionTimeExcitation;
+            else %isfield(bidsJson,'RepetitionTime')
+                weightedData(c).TR(echo) = bidsJson.RepetitionTime;
+            end
         end
         fa(echo) = deg2rad(bidsJson.FlipAngle);
         fclose(fid);
