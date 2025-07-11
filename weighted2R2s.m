@@ -95,7 +95,7 @@ end
 %% Build regression arrays
 % Build design matrix
 D=[];
-fa=[];
+fa=zeros(Nvoxels,0);
 for w=1:Nweighted
     d=zeros(length(weighted_data(w).TE),Nweighted+wBegin-1);
     d(:,1)=-weighted_data(w).TE;
@@ -157,11 +157,13 @@ switch lower(fitmethod)
         y0=exp(D*OLS(logy,D));
         
         % Loop over voxels
+        beta=zeros(size(D,2),size(y,2));
         parfor n=1:size(y,2)
             Dloc = D;
-            if strcmp(famethod,'linear')
+            faloc = fa(n,:);
+            if ~isempty(faloc)
                 for w=1:Nweighted
-                    Dloc(2,Dloc(wBegin+w-1)==1) = fa(n,w);
+                    Dloc(2,Dloc(wBegin+w-1)==1) = faloc(w);
                 end
             end
             beta(:,n)=WLS(logy(:,n),Dloc,y0(:,n),niter);
