@@ -18,6 +18,7 @@ function mpm_Ncontrasts(contrasts, b1map, outdir, threshold, r2sfamethod)
 %              ('none' or 'linear').
 
 Vref = spm_vol(char(contrasts{1}(1)));
+Vref = Vref(1); % in case the first file is 4D
 
 % ensure there is a B1 map for each contrast
 if (ischar(b1map) && size(b1map,1)==1) || isscalar(b1map)
@@ -28,53 +29,56 @@ end
 % Extract metadata
 for c = length(contrasts):-1:1 % allocate backwards to get rid of matlab warnings about needing preallocation
     currentFiles = contrasts{c}(:);
-    nEchoes = length(currentFiles);
-    weightedData(c).TE = zeros([1,nEchoes]);
-    weightedData(c).TR = zeros([1,nEchoes]);
-    weightedData(c).fa = zeros([1,nEchoes]);
-    for echo = 1:nEchoes
-        imageFile = currentFiles(echo);
+    nFiles = length(currentFiles);
+    V{c} = spm_vol(cellstr(currentFiles));
+    V{c} = cat(1,V{c}{:});
+    nEchoes = length(V{c});
+    weightedData(c).TE = [];
+    weightedData(c).TR = [];
+    fa = [];
+    for fIdx = nFiles:-1:1
+        imageFile = currentFiles(fIdx);
         fid = fopen(strrep(imageFile,"nii","json"), 'r');
         bidsJson = jsondecode(fscanf(fid,"%s"));
-        if isfield(bidsJson,'acqpar')
+        fclose(fid);
+
+        if isfield(bidsJson,'acqpar') % hMRI toolbox style
             bidsJson = bidsJson.acqpar;
-            weightedData(c).TE(echo) = bidsJson.EchoTime*1e-3;
-            weightedData(c).TR(echo) = bidsJson.RepetitionTime*1e-3;
+            weightedData(c).TE(:,fIdx) = bidsJson.EchoTime*1e-3;
+            weightedData(c).TR(fIdx) = bidsJson.RepetitionTime*1e-3;
         else
-            weightedData(c).TE(echo) = bidsJson.EchoTime;
-            if isfield(bidsJson,'RepetitionTimeExcitation')
-                weightedData(c).TR(echo) = bidsJson.RepetitionTimeExcitation;
-            else %isfield(bidsJson,'RepetitionTime')
-                weightedData(c).TR(echo) = bidsJson.RepetitionTime;
+            weightedData(c).TE(:,fIdx) = bidsJson.EchoTime;
+            if isfield(bidsJson,'RepetitionTimeExcitation') % new BIDS
+                weightedData(c).TR(fIdx) = bidsJson.RepetitionTimeExcitation;
+            else % old BIDS
+                weightedData(c).TR(fIdx) = bidsJson.RepetitionTime;
             end
         end
-        fa(echo) = deg2rad(bidsJson.FlipAngle);
-        fclose(fid);
+        fa(fIdx) = deg2rad(bidsJson.FlipAngle);
         
-        assert(weightedData(c).TR(echo)==weightedData(c).TR(1), "TR must match within a contrast!")
-        assert(weightedData(c).fa(echo)==weightedData(c).fa(1), "Flip angle must match within a contrast!")
+        assert(weightedData(c).TR(fIdx) == weightedData(c).TR(end), "TR must match within a contrast!")
+        assert(fa(fIdx) == fa(end), "Flip angle must match within a contrast!")
     end
-    weightedData(c).TR = weightedData(c).TR(1);
-    weightedData(c).fanom = fa(1);
+    weightedData(c).TE = weightedData(c).TE(:);
+    assert(length(weightedData(c).TE) == nEchoes, "There must be as many TEs as files per contrast!")
+    weightedData(c).TR = weightedData(c).TR(end);
+    weightedData(c).fanom = fa(end);
 end
 
 %% Fit R2*
 R2star = nan(Vref.dim);
 DeltaR2star = nan(Vref.dim);
-extrapolated = cell(length(contrasts),1);
-for c = 1:length(contrasts)
+extrapolated = cell(length(V),1);
+for c = 1:length(V)
     extrapolated{c} = nan(Vref.dim);
 end
 spm_progress_bar('Init',Vref.dim(3),'R2* fit');
 for z=1:Vref.dim(3) % process data by slice
-    for c = 1:length(contrasts)
-        currentFiles = char(contrasts{c}(:)); % SPM requires char array
-        nEchoes = size(currentFiles,1);
+    for c = 1:length(V)
+        nEchoes = length(V{c});
         weightedData(c).data = nan([Vref.dim(1:2),nEchoes]);
-        for echo = 1:nEchoes
-            imageFile = currentFiles(echo,:);
-            V=spm_vol(imageFile);
-            weightedData(c).data(:,:,echo) = spm_slice_vol(V,spm_matrix([0 0 z]),Vref.dim(1:2),0);
+        for fIdx = 1:nEchoes
+            weightedData(c).data(:,:,fIdx) = spm_slice_vol(V{c}(fIdx),spm_matrix([0 0 z]),Vref.dim(1:2),0);
         end
         weightedData(c).data(weightedData(c).data<eps) = eps;
 
@@ -101,9 +105,18 @@ spm_write_vol(Vout,DeltaR2star);
 
 TEzerofile = cell(length(contrasts),1);
 for c = 1:length(contrasts)
-    TEzerofile{c} = fullfile(char(outdir),spm_file(spm_file(char(contrasts{c}(1)),'suffix',['con-',num2str(c),'_TEzero']),'filename'));
+    file = char(contrasts{c}(1));
+    TEzerofile{c} = fullfile(char(outdir),spm_file(spm_file(file,'suffix',['_con-',num2str(c),'_TEzero']),'filename'));
     Vout.fname = TEzerofile{c};
     spm_write_vol(Vout,extrapolated{c});
+
+    % also output a sidecar file
+    json = jsondecode(fileread(strrep(file,".nii",".json")));
+    json.EchoTime = 0;
+    json.EchoNumber = 0;
+    fid = fopen(strrep(TEzerofile{c},".nii",".json"), 'w');
+    fprintf(fid, "%s", jsonencode(json, "PrettyPrint",true));
+    fclose(fid);
 end
 
 clear R2star extrapolated
