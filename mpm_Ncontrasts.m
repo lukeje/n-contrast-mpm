@@ -8,7 +8,7 @@ function mpm_Ncontrasts(contrasts, b1map, outdir, threshold, r2sfamethod)
 % Data must have been registered and resliced to the same space outside this script!
 %
 % contrasts:   a cell array of string arrays giving paths to data, e.g.
-%     contrasts = {["PDw_e1.nii", "PDw_e2.nii", "PDw_e3.nii"], 
+%     contrasts = {["PDw_e1.nii", "PDw_e2.nii", "PDw_e3.nii"],
 %                  ["T1w_e1.nii", "T1w_e2.nii", "T1w_e3.nii"],
 %                  ["ern_e1.nii", "ern_e2.nii", "ern_e3.nii"]};
 % outdir:      output directory
@@ -55,7 +55,7 @@ for c = length(contrasts):-1:1 % allocate backwards to get rid of matlab warning
             end
         end
         fa(fIdx) = deg2rad(bidsJson.FlipAngle);
-        
+
         assert(weightedData(c).TR(fIdx) == weightedData(c).TR(end), "TR must match within a contrast!")
         assert(fa(fIdx) == fa(end), "Flip angle must match within a contrast!")
     end
@@ -127,36 +127,38 @@ for c = length(contrasts):-1:1
     dat0(c).fanom = weightedData(c).fanom;
 end
 
-%%
-T1 = nan(Vref.dim);
-A  = nan(Vref.dim);
-spm_progress_bar('Init',Vref.dim(3),'T1 fit');
-for z = 1:Vref.dim(3) % process data by slice
-    for c = 1:length(contrasts)
-        dat0(c).data = hmri_read_vols(spm_vol(TEzerofile{c}),Vref,z,3);
+%% Fit R1 if we have enough contrasts
+if length(contrasts)>1
+    T1 = nan(Vref.dim);
+    A  = nan(Vref.dim);
+    spm_progress_bar('Init',Vref.dim(3),'T1 fit');
+    for z = 1:Vref.dim(3) % process data by slice
+        for c = 1:length(contrasts)
+            dat0(c).data = hmri_read_vols(spm_vol(TEzerofile{c}),Vref,z,3);
 
-        B1 = hmri_read_vols(spm_vol(char(b1map(c,:))),Vref,z,3)*0.01;
-        dat0(c).fa = B1*dat0(c).fanom;
+            B1 = hmri_read_vols(spm_vol(char(b1map(c,:))),Vref,z,3)*0.01;
+            dat0(c).fa = B1*dat0(c).fanom;
+        end
+
+        mask = dat0(1).data>threshold;
+
+        [A(:,:,z),T1(:,:,z)]=weighted2AT1(dat0,1,mask);
+
+        spm_progress_bar('Set',z);
     end
+    spm_progress_bar('Clear');
 
-    mask = dat0(1).data>threshold;
+    VT1 = Vout;
+    VT1.fname = char(fullfile(outdir,"T1map.nii"));
+    spm_write_vol(VT1,T1);
 
-    [A(:,:,z),T1(:,:,z)]=weighted2AT1(dat0,1,mask);
+    VR1 = Vout;
+    VR1.fname = char(fullfile(outdir,"R1map.nii"));
+    spm_write_vol(VR1,1./T1);
 
-    spm_progress_bar('Set',z);
+    VA = Vout;
+    VA.fname = char(fullfile(outdir,"Amap.nii"));
+    spm_write_vol(VA,A);
+
 end
-spm_progress_bar('Clear');
-
-VT1 = Vout;
-VT1.fname = char(fullfile(outdir,"T1map.nii"));
-spm_write_vol(VT1,T1);
-
-VR1 = Vout;
-VR1.fname = char(fullfile(outdir,"R1map.nii"));
-spm_write_vol(VR1,1./T1);
-
-VA = Vout;
-VA.fname = char(fullfile(outdir,"Amap.nii"));
-spm_write_vol(VA,A);
-
 end
