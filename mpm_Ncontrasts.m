@@ -131,18 +131,43 @@ end
 if length(contrasts)>1
     T1 = nan(Vref.dim);
     A  = nan(Vref.dim);
+    mu = zeros(Vref.dim(1:2));
     spm_progress_bar('Init',Vref.dim(3),'T1 fit');
     for z = 1:Vref.dim(3) % process data by slice
         for c = 1:length(contrasts)
             dat0(c).data = hmri_read_vols(spm_vol(TEzerofile{c}),Vref,z,3);
 
+            % voxelwise flip angle estimates
             B1 = hmri_read_vols(spm_vol(char(b1map(c,:))),Vref,z,3)*0.01;
             dat0(c).fa = B1*dat0(c).fanom;
+
+            % compute mean signal for model comparison later
+            mu = mu + dat0(c).data/length(contrasts);
         end
 
         mask = dat0(1).data>threshold;
 
-        [A(:,:,z),T1(:,:,z)]=weighted2AT1(dat0,1,mask);
+        [Aloc,T1loc]=weighted2AT1(dat0,1,mask);
+
+        % compare residual from fit with residual assuming constant signal
+        resfit = zeros(Vref.dim(1:2));
+        resmu  = zeros(Vref.dim(1:2));
+        for c=1:length(contrasts)
+            resfit = resfit + (dat0(c).data - Aloc.*hmri_test_utils.ernst(dat0(c).fa, dat0(c).TR, 1./T1loc)).^2;
+            resmu  = resmu  + (dat0(c).data - mu).^2;
+        end
+
+        % Akaike information criterion as measure of goodness of fit
+        aicfit = 2*2 + length(contrasts)*log(resfit);
+        aicmu  = 2*1 + length(contrasts)*log(resmu);
+        mubetter = aicmu < aicfit;
+
+        % Replace A and T1 if constant signal gives better fit to data
+        Aloc(mubetter)  = mu(mubetter);
+        T1loc(mubetter) = nan;
+
+        A(:,:,z)  = Aloc;
+        T1(:,:,z) = T1loc;
 
         spm_progress_bar('Set',z);
     end
